@@ -21,6 +21,16 @@ WHAT THIS MODULE DOES NOT DO — deliberately:
   - It does not drop unusable rows. It records usability via
     schema.validate_profile and leaves the filtering decision to Stage 1, so the
     peer pool keeps an auditable record of what was excluded and why.
+
+CHANGE FROM THE FIRST VERSION: funding_stage is no longer a permanent stub.
+It was previously left as None for every row because no single source column
+maps to it — that is why client_level_normalised.csv came back 242/242 null and
+the engine's peer filter was silently running vertical-only. funding_stage is
+now resolved here, once, from the two raw source columns that between them
+cover it (questionnaire's funding_series, CRM's stage_of_evolution), via
+stage_ladder.resolve_stage(). This is also why the stage resolution that used
+to live inside peer_match.py at query time has been removed from there — one
+place computes it, everywhere else just reads the field.
 """
 
 from typing import Any, Mapping, Optional
@@ -30,6 +40,7 @@ import pandas as pd
 
 import extract_text
 import schema
+import stage_ladder
 from schema import Role, Status
 
 
@@ -112,6 +123,38 @@ _COERCE = {
 
 
 # --------------------------------------------------------------------------
+# funding_stage — resolved, not mapped
+# --------------------------------------------------------------------------
+
+# Raw column names on each side. questionnaire/hubspot use these directly;
+# synthetic briefs and live intake may use either of these two spellings too.
+# If schema.py already declares peer_source/intake_source for a field named
+# "funding_series" or "stage_of_evolution", prefer those over this hardcoded
+# list — this is a fallback so the resolution doesn't silently no-op if the
+# schema hasn't been updated to declare them.
+_FUNDING_SERIES_KEYS = ("funding_series", "funding_round")
+_STAGE_OF_EVOLUTION_KEYS = ("stage_of_evolution", "stage")
+
+
+def _first_present(raw: Mapping[str, Any], keys: tuple) -> Optional[Any]:
+    for k in keys:
+        if k in raw and raw[k] is not None and not (
+            isinstance(raw[k], float) and pd.isna(raw[k])
+        ):
+            return raw[k]
+    return None
+
+
+def _resolve_funding_stage(raw: Mapping[str, Any]) -> tuple:
+    """Returns (label_for_profile, resolution) so the caller can both store the
+    canonical label and, if useful, inspect .ordinal / .conflict for an audit."""
+    funding_series = _first_present(raw, _FUNDING_SERIES_KEYS)
+    stage_of_evolution = _first_present(raw, _STAGE_OF_EVOLUTION_KEYS)
+    resolution = stage_ladder.resolve_stage(funding_series, stage_of_evolution)
+    return resolution.label, resolution
+
+
+# --------------------------------------------------------------------------
 # Core: build one profile
 # --------------------------------------------------------------------------
 
@@ -128,16 +171,27 @@ def _build(
             continue                      # volume: absent from every source
         if spec.role is Role.TRIGGER:
             continue                      # derived below, not mapped from a column
+        if spec.name == "funding_stage":
+            continue                      # resolved below, not column-mapped
 
         src = source_map.get(spec.name)
         if src is None or src not in raw:
-            profile[spec.name] = None     # includes funding_stage (STUB, no column)
+            profile[spec.name] = None
             continue
 
         coerce = _COERCE.get(spec.dtype, to_text)
         profile[spec.name] = (
             coerce(raw[src], spec.sentinels) if coerce is to_text else coerce(raw[src])
         )
+
+    # funding_stage: resolved from two incompatible source taxonomies onto one
+    # ordinal ladder, not mapped from a single column. See stage_ladder.py for
+    # why (Zombie/Dead -> None, funding_series takes precedence, etc).
+    label, resolution = _resolve_funding_stage(raw)
+    profile["funding_stage"] = label
+    profile["_funding_stage_ordinal"] = resolution.ordinal
+    profile["_funding_stage_source"] = resolution.source
+    profile["_funding_stage_conflict"] = resolution.conflict
 
     # The four trigger flags: derived from free text, identically on both sides.
     description = raw.get(description_key) if description_key else None
@@ -167,6 +221,14 @@ def normalise_intake(payload: Mapping[str, Any]) -> dict[str, Any]:
         if canonical in payload and raw_name not in merged:
             merged[raw_name] = payload[canonical]
 
+    # funding_stage isn't in source_map (resolved, not mapped — see _build), so
+    # its canonical-name alias has to be handled explicitly here, the same way
+    # business_description is below, or a caller posting {"funding_stage": "..."}
+    # or {"funding_series": "..."} would have it silently ignored.
+    for canonical_alias in ("funding_series", "stage_of_evolution"):
+        if canonical_alias in payload and canonical_alias not in merged:
+            merged[canonical_alias] = payload[canonical_alias]
+
     desc_key = schema.BY_NAME["business_description"].intake_source
     if desc_key not in merged and "business_description" in payload:
         merged[desc_key] = payload["business_description"]
@@ -186,6 +248,11 @@ def normalise_peer_pool(df: pd.DataFrame, add_ranks: bool = True) -> pd.DataFram
       usable_weight_dims    - how many of the weight dimensions are populated
       missing_filters       - which locked filters are absent
       has_description       - whether trigger flags could be derived at all
+      funding_stage_conflict- funding_series and stage_of_evolution disagreed by
+                               more than one rung (see stage_ladder.py). Worth a
+                               groupby before trusting the stage filter: if this
+                               is common, the ladder mapping needs revisiting,
+                               not the data.
     """
     profiles = [normalise_peer(row) for row in df.to_dict("records")]
     out = pd.DataFrame(profiles)
@@ -195,6 +262,7 @@ def normalise_peer_pool(df: pd.DataFrame, add_ranks: bool = True) -> pd.DataFram
     out["usable_weight_dims"] = [r["usable_weight_dims"] for r in reports]
     out["missing_filters"] = [";".join(r["missing_filters"]) for r in reports]
     out["has_description"] = out["business_description"].notna()
+    out["funding_stage_conflict"] = out["_funding_stage_conflict"]
 
     if add_ranks:
         out = add_rank_columns(out)
@@ -251,20 +319,24 @@ if __name__ == "__main__":
          "turnover_final_gbp": "£2,000,000", "employee_count_final": 30,
          "total_funding_final_gbp": 5_000_000, "us_revenue_pct": 10,
          "business_activity": "Computer Software",
-         "business_activity_description": "SaaS platform for enterprise customers."},
+         "business_activity_description": "SaaS platform for enterprise customers.",
+         "funding_series": "Series A", "stage_of_evolution": "Venture"},
         {"client_id": "UNK-004", "vertical": "Unknown", "regulated_final": None,
          "turnover_final_gbp": None, "employee_count_final": None,
          "total_funding_final_gbp": None, "us_revenue_pct": None,
-         "business_activity": None, "business_activity_description": None},
+         "business_activity": None, "business_activity_description": None,
+         "funding_series": None, "stage_of_evolution": "Zombie"},
         {"client_id": "MED-002", "vertical": "MedTech", "regulated_final": False,
          "turnover_final_gbp": 800_000, "employee_count_final": 12,
          "total_funding_final_gbp": 3_000_000, "us_revenue_pct": None,
          "business_activity": "Scientific Research",
-         "business_activity_description": "Virtual care platform for patients, built with clinicians."},
+         "business_activity_description": "Virtual care platform for patients, built with clinicians.",
+         "funding_series": "Seed", "stage_of_evolution": "Established"},  # conflict, on purpose
     ])
 
     pool = normalise_peer_pool(fake_peers)
     cols = ["client_id", "vertical", "turnover_gbp", "employee_count",
+            "funding_stage", "funding_stage_conflict",
             "personal_data", "medical_data", "profile_usable",
             "usable_weight_dims", "missing_filters"]
     print(pool[cols].to_string(index=False))
@@ -279,9 +351,10 @@ if __name__ == "__main__":
     }
     prospect = normalise_intake(brief)
     for k, v in prospect.items():
-        print(f"   {k:<22} {v!r}")
+        print(f"   {k:<28} {v!r}")
 
     print("\n-- validation --")
     print("  ", schema.validate_profile(prospect))
     print("\n-- prospect vs pool percentiles --")
+    print("Length of pool", len(pool))
     print("  ", rank_against_pool(prospect, pool))
