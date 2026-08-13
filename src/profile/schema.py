@@ -401,13 +401,16 @@ def validate_profile(profile: dict) -> dict:
     )
     missing_filters, missing_soft_filters = [], []
     missing_weights, unknown_triggers = [], []
-
+    
     for spec in filter_fields():
         if is_missing(profile.get(spec.name), spec):
-            # Only a LOCKED filter is fatal. `regulated` is PROVISIONAL and just
-            # 69.8% complete — treating it as hard would silently drop ~30% of
-            # the peer pool on a role we have not even settled yet.
-            if spec.status is Status.LOCKED:
+            # A filter is only fatal if there's no fallback (na_policy) AND its
+            # role is settled (status). SKIP_DIMENSION fields degrade gracefully
+            # by design — funding_stage has a fallback (skip the stage match)
+            # even though its role is LOCKED, so status alone isn't sufficient.
+            if spec.na_policy is NAPolicy.SKIP_DIMENSION:
+                missing_soft_filters.append(spec.name)
+            elif spec.status is Status.LOCKED:
                 missing_filters.append(spec.name)
             else:
                 missing_soft_filters.append(spec.name)
