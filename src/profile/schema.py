@@ -110,19 +110,32 @@ SCHEMA: list[FieldSpec] = [
     FieldSpec(
         name="funding_stage",
         role=Role.FILTER,
-        status=Status.STUB,          # <-- BLOCKED. Do not build against this yet.
+        status=Status.LOCKED,        # UNBLOCKED — see stage_ladder.py
         dtype="category",
         na_policy=NAPolicy.SKIP_DIMENSION,
-        peer_source=None,            # no resolved column exists in client_level.csv
+        peer_source=None,            # resolved from TWO raw columns, not one — see transform
         intake_source="funding_series",
-        completeness=None,
-        evidence="BLOCKED: Phase 1 never coalesced this. Two incompatible taxonomies remain — "
+        completeness=None,           # TODO: compute sentinel-aware completeness once
+                                      # normalise_peer_pool has been re-run over client_level.csv
+                                      # with this fix; report resolved/n and conflict count.
+        transform="stage_ladder.resolve_stage",
+        evidence="RESOLVED. The two source taxonomies remain genuinely incompatible — "
                  "questionnaire funding_series (Pre-Seed/Seed/Series A-D+, 127/221) vs HubSpot "
-                 "stage_of_evolution (Seed/Venture/Growth/Established/Zombie/Dead, 133/197). "
-                 "'Venture'/'Growth' are not funding rounds, so there is no clean mapping yet. "
-                 "Intended role is an adjacent-stage filter (Series A also pulls Seed + Series B) "
-                 "to avoid tiny cohorts. Until a reconciliation table exists, Stage 1 must filter "
-                 "on vertical only and treat this as a no-op.",
+                 "stage_of_evolution (Seed/Venture/Growth/Established/Zombie/Dead, 133/197) — but "
+                 "src/profile/stage_ladder.py now reconciles both onto one coarse 4-rung ordinal "
+                 "(Pre-seed/Seed, Early venture ~A, Growth ~B-C, Late/Established ~D+), used only "
+                 "with a +/-1 rung adjacency window at query time. The window is the defence: we "
+                 "are not claiming the taxonomies are equivalent, only that they agree within the "
+                 "tolerance actually used for filtering. funding_series takes precedence when both "
+                 "are present (finer-grained, self-reported at health-check time vs a CRM-assigned "
+                 "label); 'Zombie'/'Dead' map to None — they describe viability, not maturity, and "
+                 "coercing them to a rung would put failing companies in a healthy peer's cohort on "
+                 "a field that says nothing about size. Run stage_ladder.audit() against the real "
+                 "pool before trusting the filter in a demo: if funding_series and stage_of_evolution "
+                 "disagree by more than one rung on a large share of rows, the mapping needs "
+                 "revisiting, not the data. Previously STUB; unblocked once the ladder existed — "
+                 "peer_source stays None (no single column), na_policy is unchanged (missing stage "
+                 "means the filter is skipped for that query, not that the peer/prospect is dropped).",
     ),
     FieldSpec(
         name="regulated",
@@ -377,8 +390,15 @@ def validate_profile(profile: dict) -> dict:
     Returns a report rather than raising: an incomplete profile is a normal
     condition here, and downstream stages need to know *what* is missing so they
     can report match confidence honestly.
+
+    Keys prefixed with '_' (e.g. _funding_stage_ordinal) are normalise.py's own
+    audit trail, not schema fields — excluded from unknown_keys so every
+    validate_profile() call doesn't report the same three "unknown" keys that
+    are actually working as intended.
     """
-    unknown_keys = sorted(set(profile) - set(BY_NAME))
+    unknown_keys = sorted(
+        k for k in set(profile) - set(BY_NAME) if not k.startswith("_")
+    )
     missing_filters, missing_soft_filters = [], []
     missing_weights, unknown_triggers = [], []
 
