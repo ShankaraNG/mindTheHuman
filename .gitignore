@@ -1,4 +1,5 @@
-data/
 dataset/
-.venv
+data/
+__pycache__/
+*.pyc
 diff.txt
