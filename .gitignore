@@ -1,0 +1,5 @@
+dataset/
+data/
+__pycache__/
+*.pyc
+diff.txt
