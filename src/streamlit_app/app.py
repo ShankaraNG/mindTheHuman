@@ -286,7 +286,14 @@ elif st.session_state.step == "report":
             st.session_state.step = "upload"
             st.rerun()
     with col2:
-        pdf_bytes = build_pdf(report)
-        st.download_button("⬇ Download PDF report", data=pdf_bytes,
-                           file_name=f"capsule_benchmark_{profile['vertical']}.pdf",
-                           mime="application/pdf", use_container_width=True)
+        # Last thing on the page, but it runs on every rerun — so an export
+        # failure used to blank the whole report the pipeline just produced.
+        # The findings above are the deliverable; the PDF is a convenience.
+        try:
+            pdf_bytes = build_pdf(report)
+        except Exception as e:
+            st.warning(f"PDF export unavailable: {e}")
+        else:
+            st.download_button("⬇ Download PDF report", data=pdf_bytes,
+                               file_name=f"capsule_benchmark_{profile['vertical']}.pdf",
+                               mime="application/pdf", use_container_width=True)

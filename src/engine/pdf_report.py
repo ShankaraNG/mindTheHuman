@@ -128,7 +128,10 @@ def build_pdf(report: dict) -> bytes:
         pdf.ln(2)
 
     # ── Findings, grouped by priority ────────────────────────────────────
-    exp_map = {f["cover"]: f for f in exp.get("cover_findings", [])}
+    # cover_findings is LLM-authored: entries may be missing "cover", or not be
+    # dicts at all. A malformed one must cost its own rationale, not the report.
+    exp_map = {f["cover"]: f for f in exp.get("cover_findings", [])
+               if isinstance(f, dict) and f.get("cover")}
     order = {"Immediate action": 0, "For consideration": 1, "Review at renewal": 2}
     sorted_gaps = sorted(gaps, key=lambda g: order.get(g["priority"], 3))
 
@@ -170,18 +173,25 @@ def build_pdf(report: dict) -> bytes:
         pdf.ln(2)
 
     # ── Priority actions ──────────────────────────────────────────────────
-    if exp.get("top_actions"):
+    actions = [a for a in exp.get("top_actions") or []
+               if isinstance(a, dict) and a.get("action")]
+    if actions:
         pdf.section_title("Priority actions")
-        for a in exp["top_actions"]:
-            pdf.body_text(f"[{RAG_LABEL.get(a['priority'], a['priority'])}]  {a['action']}", size=9)
+        for a in actions:
+            priority = a.get("priority") or ""
+            label = f"[{RAG_LABEL.get(priority, priority)}]  " if priority else ""
+            pdf.body_text(f"{label}{a['action']}", size=9)
         pdf.ln(2)
 
     # ── Disclaimer ────────────────────────────────────────────────────────
     pdf.ln(4)
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(110, 110, 110)
-    pdf.multi_cell(0, 4.5, exp.get("disclaimer") or
+    # _sanitize, not raw: the disclaimer is LLM-authored like every other string
+    # here, and Helvetica is latin-1 only. One em-dash was enough to kill the
+    # whole export — and with it the Streamlit report page that renders it.
+    pdf.multi_cell(0, 4.5, _sanitize(exp.get("disclaimer") or
                    "This is guidance, not regulated advice. Speak with a Capsule "
-                   "broker to confirm suitability for your circumstances.")
+                   "broker to confirm suitability for your circumstances."))
 
     return bytes(pdf.output())

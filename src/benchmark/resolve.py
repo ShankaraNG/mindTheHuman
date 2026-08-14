@@ -68,6 +68,9 @@ class CoverBenchmark:
     # peer evidence
     n_cohort: int = 0
     n_holding: int = 0
+    # Holders are not the same as holders who disclosed a limit. The percentiles
+    # describe the latter, so that is the number reference_source must cite.
+    n_limits: int = 0
     prevalence: Optional[float] = None
     p25: Optional[float] = None
     median: Optional[float] = None
@@ -99,7 +102,7 @@ class CoverBenchmark:
     @property
     def reference_source(self) -> Optional[str]:
         if self.evidence_tier in (TIER_PEER_AND_BAND, TIER_PEER_ONLY):
-            return f"median of {self.n_holding} comparable Capsule clients"
+            return f"median of {self.n_limits} comparable Capsule clients"
         if self.evidence_tier == TIER_BAND_ONLY:
             return self.band_label
         return None
@@ -130,6 +133,7 @@ class BenchmarkResult:
                     "reference_limit": c.reference_limit,
                     "reference_source": c.reference_source,
                     "peers": {"cohort": c.n_cohort, "holding": c.n_holding,
+                              "with_disclosed_limit": c.n_limits,
                               "prevalence": c.prevalence,
                               "p25": c.p25, "median": c.median, "p75": c.p75},
                     "band": {"limit": c.band_limit, "label": c.band_label,
@@ -194,8 +198,26 @@ class BenchmarkResolver:
         before = len(cs)
         cs = cs[cs["coverage_canonical"].isin(coverage_names.HEADLINE)]
         self.sublimit_rows_excluded = int(before - len(cs))
+        cs = cs.copy()
         cs[c["limit"]] = pd.to_numeric(cs[c["limit"]], errors="coerce")
         cs[c["client_id"]] = cs[c["client_id"]].astype(str)
+
+        # ONE ROW PER CLIENT PER COVER. The source file is one row per raw cover
+        # NAME, and several raw names collapse onto one canonical cover — FIN-028
+        # carries both "Employers Liability" and "Employers' Liability", CON-023
+        # both "Corporate Liability" and "Directors' and Officers' Liability".
+        # Left as-is, one client contributes up to five rows to a single cover,
+        # which (a) row-weights the median toward whichever clients happen to be
+        # recorded at finer granularity and (b) defeats MIN_PEERS_FOR_PERCENTILES
+        # entirely — 2 clients x 4 rows passes a 5-peer floor. Max, for the same
+        # reason max_limit_amount is the chosen limit column: the headline
+        # indemnity limit, not a section sub-limit that would understate it.
+        # max() skips NaN, so a client whose limit is disclosed on one spelling
+        # and blank on another keeps the disclosed figure.
+        before_dedupe = len(cs)
+        cs = (cs.groupby([c["client_id"], "coverage_canonical"],
+                         as_index=False, sort=False)[c["limit"]].max())
+        self.duplicate_rows_collapsed = int(before_dedupe - len(cs))
         self.cover_summary = cs
         # The only clients that can contribute evidence.
         self.covered_ids = set(cs[c["client_id"]].astype(str))
@@ -242,16 +264,34 @@ class BenchmarkResolver:
                 if not peer_rows.empty else peer_rows
 
             n_holding = int(holders[self.cols["client_id"]].nunique()) if len(holders) else 0
-            limits = holders[self.cols["limit"]].dropna() if len(holders) else pd.Series(dtype=float)
-            n_limits = int(len(limits))
+            # n_limits counts CLIENTS with a disclosed limit, never rows. The
+            # dedupe in __init__ already makes these equal; counting clients
+            # here as well means MIN_PEERS_FOR_PERCENTILES can never be passed
+            # by one client contributing several rows, whatever the input file
+            # looks like. "A median of three is not a median" — nor is a median
+            # of nine rows belonging to three clients.
+            disclosed = (holders[holders[self.cols["limit"]].notna()]
+                         if len(holders) else holders)
+            limits = (disclosed[self.cols["limit"]] if len(disclosed)
+                      else pd.Series(dtype=float))
+            n_limits = int(disclosed[self.cols["client_id"]].nunique()) if len(disclosed) else 0
 
-            prevalence = (n_holding / n_cohort) if cohort_usable and n_cohort else None
+            # PREVALENCE ONLY WHERE IT CAN BE OBSERVED. cover_summary is filtered
+            # to HEADLINE covers, so a cover named only by the band table (e.g.
+            # Intellectual Property, Mortgage Protection) has n_holding == 0 by
+            # construction, not by evidence. Reporting that as "0% of peers hold
+            # this" is a fabricated statistic about data we excluded ourselves.
+            # None means "not observable", which is what the report should say.
+            observable = name in coverage_names.HEADLINE
+            prevalence = ((n_holding / n_cohort)
+                          if observable and cohort_usable and n_cohort else None)
 
             bm = CoverBenchmark(
                 coverage=name,
                 evidence_tier=TIER_INSUFFICIENT,
                 n_cohort=n_cohort,
                 n_holding=n_holding,
+                n_limits=n_limits,
                 prevalence=prevalence,
                 band_limit=hit.recommended_limit if hit else None,
                 band_label=hit.band_label if hit else None,
@@ -277,10 +317,18 @@ class BenchmarkResolver:
                                    f"{ratio:.1f}x — worth a broker eye")
             elif has_band:
                 bm.evidence_tier = TIER_BAND_ONLY
-                bm.note = (f"only {n_limits} peer limit"
-                           f"{'' if n_limits == 1 else 's'} available "
-                           f"(need {MIN_PEERS_FOR_PERCENTILES}) — "
-                           f"benchmark is Capsule's published band")
+                if not observable:
+                    # Not "no peers hold it" — the book records this cover only
+                    # as a policy sub-section, so it is outside HEADLINE and
+                    # carries no comparable peer evidence either way.
+                    bm.note = ("Capsule's published band only — the book of "
+                               "business does not record this cover at policy "
+                               "level, so peer holdings cannot be compared")
+                else:
+                    bm.note = (f"only {n_limits} peer"
+                               f"{'' if n_limits == 1 else 's'} disclosed a limit "
+                               f"(need {MIN_PEERS_FOR_PERCENTILES}) — "
+                               f"benchmark is Capsule's published band")
             elif cohort_usable and n_holding:
                 bm.evidence_tier = TIER_PREVALENCE_ONLY
                 bm.note = (f"{n_holding} of {n_cohort} comparable clients hold "
