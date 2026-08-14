@@ -1,0 +1,139 @@
+# Capsule Cover — Benchmarking Engine: Full Setup Guide
+
+Complete steps from a fresh checkout to a running system.
+
+## Prerequisites
+
+**Use Python 3.11, not 3.14.** The eval harness's real embeddings fallback
+(sentence-transformers/torch) is confirmed broken on Python 3.14 — a
+transformers 5.x internal import fails in a way that doesn't affect 3.11.
+Everything else works on either version, but there's no reason to fight
+that bug for no benefit. If you have multiple Pythons installed, check with:
+```powershell
+py -0
+```
+
+## 1. Get the code and data
+
+```powershell
+cd path\to\your\project
+```
+
+Your `dataset/` folder (gitignored, not in the repo) needs this exact structure:
+```
+dataset/
+├── 1_recommendation_bank/     # 21 *_healthcheck.md files
+├── 2_book_of_business/        # recorder_*, deck_* CSVs
+├── 3_company_context/         # healthcheck_questionnaire, hubspot_company_context
+└── 4_evaluation/               # synthetic_prospect_briefs.csv
+```
+Copy it in from wherever your team keeps the raw dataset export.
+
+## 2. Create and activate the virtual environment
+
+```powershell
+C:\python3119\python.exe -m venv venv
+venv\Scripts\activate
+python --version
+```
+Confirm it prints `Python 3.11.9` (or your equivalent 3.11.x). Your prompt
+should now show `(venv)`.
+
+## 3. Install everything
+
+```powershell
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+Takes a few minutes — `sentence-transformers` pulls in `torch`, a large
+download.
+
+## 4. Secrets — two separate files, two separate purposes
+
+**`.streamlit/secrets.toml`** (Streamlit app reads this):
+```powershell
+mkdir .streamlit -ErrorAction SilentlyContinue
+python -c "open('.streamlit/secrets.toml','w',encoding='utf-8').write('GEMINI_API_KEY = \"your-key-here\"\n')"
+```
+
+**`.env`** (FastAPI/uvicorn reads this):
+```powershell
+python -c "open('.env','w',encoding='utf-8').write('GEMINI_API_KEY=your-key-here\n')"
+```
+Same key value in both — just two different formats two different tools
+expect. Always write these with the Python one-liner above, not PowerShell's
+`>` redirect — PowerShell defaults to UTF-16 with a BOM, which crashes both
+tools' parsers.
+
+Confirm both parse cleanly:
+```powershell
+python -c "import tomllib; print(tomllib.load(open('.streamlit/secrets.toml','rb')))"
+python -c "from dotenv import dotenv_values; print(dotenv_values('.env'))"
+```
+
+**Add both to `.gitignore` if they aren't already:**
+```powershell
+Add-Content .gitignore ".env"
+```
+
+## 5. Run the cleaning pipeline
+
+```powershell
+python src\clean\run_all.py
+```
+Watch for three `PASS` lines. If you've run the eval harness or built the
+normalised profile before, delete their outputs first — `assert_join_integrity.py`
+globs everything in `data/`, including files it doesn't own:
+```powershell
+Remove-Item data\client_level_normalised.csv -ErrorAction SilentlyContinue
+Remove-Item data\eval_results.csv -ErrorAction SilentlyContinue
+python src\clean\run_all.py
+```
+
+## 6. Build the normalised peer pool
+
+```powershell
+python src\profile\build_normalised.py
+```
+Produces `data/client_level_normalised.csv` — the file the peer-matching and
+benchmark layers actually read.
+
+## 7. Sanity check — run the eval harness
+
+```powershell
+python src\evaluation\run_eval.py
+```
+Look for `[semantic_match] embeddings worker started (subprocess, isolated sys.modules)`
+near the top — confirms real embeddings are working. Should finish with
+`Ran 24 briefs — 24 OK, 0 failed/no-peers` and a mean score.
+
+## 8. Run the Streamlit app
+
+```powershell
+streamlit run src\streamlit_app\app.py
+```
+Opens in your browser automatically, usually `http://localhost:8501`.
+
+## 9. Run the FastAPI app (separate, optional)
+
+```powershell
+python -m uvicorn src.api.main:app --reload --port 8000
+```
+Interactive docs at `http://localhost:8000/docs`. Health check:
+```powershell
+curl http://localhost:8000/health
+```
+
+## Quick reference — every command in order
+
+```powershell
+C:\python3119\python.exe -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+python -c "open('.streamlit/secrets.toml','w',encoding='utf-8').write('GEMINI_API_KEY = \"YOUR_KEY\"\n')"
+python -c "open('.env','w',encoding='utf-8').write('GEMINI_API_KEY=YOUR_KEY\n')"
+python src\clean\run_all.py
+python src\profile\build_normalised.py
+python src\evaluation\run_eval.py
+streamlit run src\streamlit_app\app.py
+```

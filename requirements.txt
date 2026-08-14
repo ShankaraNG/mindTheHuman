@@ -1,0 +1,41 @@
+# Core pipeline
+# pandas MUST be 3.x — src/clean/clean_synthetic_briefs.py uses
+# select_dtypes(include=["object", "str"]), which relies on pandas 3's
+# native string dtype. On pandas 2.x, "str" is rejected outright
+# (TypeError: string dtypes are not allowed) — this isn't a version
+# preference, the clean/ scripts require 3.x specifically.
+pandas>=3.0
+numpy>=1.26
+openpyxl==3.1.5
+
+# Streamlit app
+streamlit==1.38.0
+
+# FastAPI — thin HTTP wrapper around the same pipeline app.py uses.
+# python-dotenv loads GEMINI_API_KEY from a .env file at repo root, so
+# uvicorn doesn't need $env: set manually every session (Streamlit reads
+# .streamlit/secrets.toml instead — the two are separate on purpose).
+fastapi
+uvicorn[standard]
+python-dotenv
+
+# LLM — routed through the event's LiteLLM proxy via the OpenAI-compatible
+# interface, NOT google-genai (that package is no longer used anywhere).
+openai>=1.0.0
+
+# PDF report export
+fpdf2==2.8.8
+
+# Eval harness — real sentence embeddings fallback for theme matching.
+# Runs in its own subprocess (src/evaluation/embeddings_worker.py) — NOT
+# a stylistic choice, it routes around a real bug: importing profile.
+# normalise anywhere in this project overwrites sys.modules['profile']
+# with our src/profile/ package, shadowing Python's stdlib profile module.
+# transformers 5.x's internal `import cProfile` -> `import profile` then
+# breaks several layers deep with a misleading "Could not import module
+# 'PreTrainedModel'" error. A subprocess has its own sys.modules, so this
+# works there. Confirmed working on Python 3.11, confirmed NOT working
+# in-process on Python 3.14. If sentence-transformers fails to install or
+# the worker fails to load the model, the eval harness still runs fine on
+# vocabulary matching alone — see semantic_match.py's own docstring.
+sentence-transformers
