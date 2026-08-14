@@ -37,7 +37,7 @@ from gemini_explainer import GeminiExplainer
 
 class Orchestrator:
     def __init__(self, data_dir: str, healthcheck_dir: str = None,
-                 gemini_api_key: str = None, gemini_model: str = "gemini-2.5-flash"):
+                 gemini_api_key: str = None, gemini_model: str = "gemini-3.6-flash"):
         data_dir = Path(data_dir)
         self.resolver = resolve.BenchmarkResolver.from_paths(
             pool_csv=str(data_dir / "client_level_normalised.csv"),
@@ -61,7 +61,7 @@ class Orchestrator:
             canon_cover[c.canonical or raw_name] = limit
 
         result = self.resolver.resolve(profile)
-        findings = gap_rules.apply_gap_rules(result, canon_cover)
+        findings = gap_rules.apply_gap_rules(result, canon_cover, profile)
 
         gap_results = []
         for f in findings:

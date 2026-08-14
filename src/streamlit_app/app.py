@@ -255,12 +255,19 @@ elif st.session_state.step == "report":
                 cols[0].markdown(f"**Current**  \n{fmt_gbp(item['current_limit']) if item['current_limit'] else 'Not held'}")
                 if ev.get("peer_median"):
                     cols[1].markdown(f"**Peer median** ({ev.get('peer_n')} of {ev.get('n_cohort')} peers)  \n{fmt_gbp(ev['peer_median'])}")
+                elif ev.get("band_rec"):
+                    cols[1].markdown(f"**Capsule band**  \n{fmt_gbp(ev['band_rec'])}")
                 if ev.get("prevalence") is not None:
                     cols[2].markdown(f"**Prevalence**  \n{ev['prevalence']:.0%}")
                 if e.get("rationale"):
                     st.write(e["rationale"])
                 if ev.get("note"):
                     st.caption(ev["note"])
+                if e.get("alternatives"):
+                    st.markdown("**Alternative approaches**")
+                    for alt in e["alternatives"]:
+                        badge = "📎" if alt.get("grounded") else "💡"
+                        st.markdown(f"{badge} **{alt['approach']}** — {alt.get('detail', '')}")
 
     if exp.get("top_actions"):
         st.divider()

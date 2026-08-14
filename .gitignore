@@ -3,3 +3,10 @@ data/
 __pycache__/
 *.pyc
 diff.txt
+.venv
+venv/
+.env
+.vscode
+.agents
+.claude
+.streamlit

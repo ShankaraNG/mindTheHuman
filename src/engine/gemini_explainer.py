@@ -1,14 +1,21 @@
 """
-LLM Explainer — google-genai (current SDK, replaces deprecated google-generativeai).
+LLM Explainer — routed through the event's LiteLLM proxy (OpenAI-compatible
+interface), not Google's native genai SDK. The proxy key is not a real
+Google API key; it only works against base_url below.
+
+Available models through this proxy (as issued): gemini-3.6-flash,
+gemini-3.5-flash, gemini-3.1-pro. Defaulting to gemini-3.6-flash — Google's
+own current stable/default Flash tier, and explicitly whitelisted here.
 
 Same contract as before: the LLM receives frozen evidence (direction,
-priority, numbers already decided by Stages 1-3) and writes plain-English
-rationale only. It cannot change any number.
+priority, numbers already decided upstream) and writes plain-English
+rationale + alternative approaches only. It cannot change any number.
 """
 
 import os, json, re
-from google import genai
-from google.genai import types
+from openai import OpenAI
+
+DEFAULT_BASE_URL = "https://litellm.perceptura.com"
 
 
 def _fmt_gbp(n):
@@ -30,16 +37,25 @@ RULES — read carefully:
 4. For INSUFFICIENT confidence: say "insufficient peer data — broker review recommended."
 5. Never recommend a specific insurer or premium figure.
 6. Frame everything as "guidance, not regulated advice."
-7. Return ONLY valid JSON — no markdown fences, no preamble, no trailing text."""
+7. For every finding with direction GAP or INCREASE, propose 2-3 named ALTERNATIVE APPROACHES to closing it —
+   e.g. raising straight to the peer benchmark, layering primary + excess cover, phasing an increase across
+   renewals, bundling with an adjacent cover. These are OPTIONS for a human broker to weigh, not a decision —
+   you are not choosing between them or recommending one. Ground each in the rag_excerpt or historical evidence
+   where possible; if there's no evidence for a specific alternative, still offer it but say so plainly rather
+   than inventing a source. Findings with direction OK or NEEDS_REVIEW get an empty alternatives list — there
+   is nothing to close, or not enough evidence to suggest how.
+8. Return ONLY valid JSON — no markdown fences, no preamble, no trailing text."""
 
 
 class GeminiExplainer:
-    def __init__(self, api_key: str = None, model_name: str = "gemini-2.5-flash"):
+    def __init__(self, api_key: str = None, model_name: str = "gemini-3.6-flash",
+                base_url: str = None):
         api_key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
         if not api_key:
             raise ValueError("Set GEMINI_API_KEY or GOOGLE_API_KEY environment variable")
 
-        self.client = genai.Client(api_key=api_key)
+        base_url = base_url or os.environ.get("LITELLM_BASE_URL") or DEFAULT_BASE_URL
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model_name = model_name
 
     def explain(self, profile: dict, gap_results: list, summary_stats: dict) -> dict:
@@ -71,7 +87,7 @@ class GeminiExplainer:
                 "rag_excerpt":   rag_text or None,
             })
 
-        prompt = f"""Write a benchmarking report explanation for this {vertical} {funding} company.
+        user_prompt = f"""Write a benchmarking report explanation for this {vertical} {funding} company.
 
 PROSPECT PROFILE:
 - Vertical: {vertical}
@@ -96,30 +112,44 @@ Return JSON with this exact structure:
       "direction": "<copy exactly from input>",
       "priority": "<copy exactly from input>",
       "confidence": "<copy exactly from input>",
-      "rationale": "<your 2-3 sentence plain-English explanation citing evidence>"
+      "rationale": "<your 2-3 sentence plain-English explanation citing evidence>",
+      "alternatives": [
+        {{"approach": "<short name, e.g. 'Raise to peer median directly'>",
+          "detail": "<1-2 sentences on what this involves and any tradeoff>",
+          "grounded": true}}
+      ]
     }}
   ],
   "top_actions": [
     {{"action": "<short imperative>", "priority": "<Immediate action|For consideration|Review at renewal>"}}
   ],
   "disclaimer": "This is guidance, not regulated advice. Speak with a Capsule broker to confirm suitability for your circumstances."
-}}"""
+}}
 
+"alternatives" is a list of 2-3 items for GAP/INCREASE findings, an empty list [] for OK/NEEDS_REVIEW.
+"grounded" is true only if the alternative is backed by rag_excerpt or historical evidence in the input —
+set it false rather than fabricate a citation."""
+
+        raw = None
         try:
-            response = self.client.models.generate_content(
+            response = self.client.chat.completions.create(
                 model=self.model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
-                    temperature=0.3,
-                    response_mime_type="application/json",
-                ),
+                messages=[
+                    {"role": "system", "content": SYSTEM_INSTRUCTION},
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_format={"type": "json_object"},
             )
-            raw = response.text
+            raw = response.choices[0].message.content
             clean = re.sub(r"```(?:json)?|```", "", raw).strip()
-            return json.loads(clean)
+            parsed = json.loads(clean)
+            for finding in parsed.get("cover_findings", []):
+                finding.setdefault("alternatives", [])
+                for alt in finding["alternatives"]:
+                    alt.setdefault("grounded", False)
+            return parsed
         except json.JSONDecodeError:
-            return {"executive_summary": raw, "parse_error": True,
+            return {"executive_summary": raw or "(no response text)", "parse_error": True,
                     "cover_findings": [], "top_actions": []}
         except Exception as e:
             return {"executive_summary": f"LLM explanation unavailable: {e}",

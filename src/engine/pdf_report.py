@@ -153,11 +153,20 @@ def build_pdf(report: dict) -> bytes:
         if ev.get("peer_median"):
             detail_bits.append(f"Peer median ({ev.get('peer_n')} peers): {_fmt_gbp(ev['peer_median'])}")
         if ev.get("band_rec"):
-            detail_bits.append(f"Capsule band: {ev['band_rec']}")
+            detail_bits.append(f"Capsule band: {_fmt_gbp(ev['band_rec'])}")
         pdf.body_text("   ".join(detail_bits), size=9)
 
         if rationale:
             pdf.body_text(rationale, size=9)
+
+        alternatives = exp_map.get(cover, {}).get("alternatives", [])
+        if alternatives:
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.cell(0, 5, "Alternative approaches:", ln=True)
+            for alt in alternatives:
+                marker = "[grounded] " if alt.get("grounded") else "[option] "
+                pdf.body_text(f"- {marker}{alt.get('approach','')} - {alt.get('detail','')}", size=9)
+
         pdf.ln(2)
 
     # ── Priority actions ──────────────────────────────────────────────────
