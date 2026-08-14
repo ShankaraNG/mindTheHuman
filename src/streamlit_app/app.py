@@ -69,21 +69,32 @@ RAG_COLORS = {"Immediate action": "🔴", "For consideration": "🟠", "Review a
 DIR_LABELS = {"GAP": "⬛ Not held", "INCREASE": "⬆️ Below benchmark",
               "OK": "✅ Adequate", "NEEDS_REVIEW": "❔ Insufficient evidence"}
 
+STEPS = ["Upload", "Profile", "Current cover", "Report"]
+
+
+def step_header(n: int, title: str):
+    """Show where the user is in the flow, then the step's own heading."""
+    trail = " · ".join(f"**{s}**" if i == n - 1 else s for i, s in enumerate(STEPS))
+    st.caption(f"Step {n} of {len(STEPS)} — {trail}")
+    st.subheader(title)
+
 for k in ["step", "profile", "report", "current_cover"]:
     if k not in st.session_state:
         st.session_state[k] = None
 if st.session_state.step is None:
     st.session_state.step = "upload"
 
-st.markdown("Benchmarking engine")
+st.title("Capsule Cover — Benchmarking engine")
 st.caption("Guidance, not regulated advice. Benchmarked against Capsule's own client book.")
 st.divider()
 
 
 # ══════════════════════════ STEP 1 — Upload ═══════════════════════════════
 if st.session_state.step == "upload":
-    st.markdown("Upload the health check questionnaire")
-    uploaded = st.file_uploader("Questionnaire file", type=["csv", "xlsx", "xls"])
+    step_header(1, "Upload the health check questionnaire")
+    uploaded = st.file_uploader("Questionnaire file", type=["csv", "xlsx", "xls"],
+                                help="The completed health check export — CSV or Excel. "
+                                     "One row per client; you'll pick which one to benchmark.")
 
     col1, col2 = st.columns([1, 1])
     with col2:
@@ -125,7 +136,9 @@ if st.session_state.step == "upload":
 
 # ══════════════════════════ STEP 2 — Confirm profile ═══════════════════════
 elif st.session_state.step == "profile":
-    st.markdown("Confirm the business profile")
+    step_header(2, "Confirm the business profile")
+    st.caption("Anything the questionnaire couldn't fill is left at 0 — correct it here. "
+               "Blank (0) fields are treated as unknown, not as zero.")
     p = st.session_state.profile
 
     col1, col2 = st.columns(2)
@@ -134,14 +147,21 @@ elif st.session_state.step == "profile":
                                  index=VERTICALS.index(p["vertical"]) if p.get("vertical") in VERTICALS else 0)
         funding = st.selectbox("Funding stage (self-reported)", FUNDING_STAGES, index=2,
                                 help="Used with your CRM stage to place you on Capsule's maturity ladder.")
-        turnover = st.number_input("Annual turnover (£)", min_value=0,
-                                    value=int(p.get("turnover_gbp") or 0), step=100000)
-        total_funding = st.number_input("Total funding raised (£)", min_value=0,
-                                         value=int(p.get("total_funding_gbp") or 0), step=100000)
+        turnover = st.number_input("Annual turnover (£, whole pounds)", min_value=0,
+                                    value=int(p.get("turnover_gbp") or 0), step=100000,
+                                    help="Full amount in pounds, e.g. 2500000 for £2.5m.")
+        st.caption(f"= {fmt_gbp(turnover) if turnover else 'unknown'}")
+        total_funding = st.number_input("Total funding raised (£, whole pounds)", min_value=0,
+                                         value=int(p.get("total_funding_gbp") or 0), step=100000,
+                                         help="Cumulative raised to date, in pounds.")
+        st.caption(f"= {fmt_gbp(total_funding) if total_funding else 'unknown'}")
     with col2:
-        employees = st.number_input("Employees", min_value=0, value=int(p.get("employee_count") or 0))
-        us_pct = st.number_input("US revenue (%)", min_value=0, max_value=100,
-                                  value=int(p.get("us_revenue_pct") or 0))
+        employees = st.number_input("Employees (headcount)", min_value=0,
+                                     value=int(p.get("employee_count") or 0))
+        us_pct = st.number_input("US revenue (% of turnover)", min_value=0, max_value=100,
+                                  value=int(p.get("us_revenue_pct") or 0),
+                                  help="Share of revenue from US customers — drives US "
+                                       "liability exposure in the benchmark.")
         customer_type = st.selectbox("Customer type", ["B2B", "B2C", "Both"],
                                       index=["B2B","B2C","Both"].index(p["customer_type"]) if p.get("customer_type") in ["B2B","B2C","Both"] else 0)
         sw_hw = st.selectbox("Software or hardware", ["Software", "Hardware", "Both"],
@@ -173,22 +193,46 @@ elif st.session_state.step == "profile":
 
 # ══════════════════════════ STEP 3 — Current cover ═════════════════════════
 elif st.session_state.step == "cover":
-    st.markdown("Current cover")
-    st.caption("The questionnaire doesn't capture limits. Tell us what's currently held.")
+    step_header(3, "Current cover")
+    st.caption("The questionnaire doesn't capture limits. Tick each cover currently held and "
+               "give its indemnity limit **in £ millions** — enter `2` for £2m, `0.5` for £500k.")
 
     vertical = st.session_state.profile["vertical"]
     options = COVER_OPTIONS.get(vertical, COVER_OPTIONS["Tech"])
 
+    h1, h2 = st.columns([2, 1])
+    h1.markdown("**Cover held**")
+    h2.markdown("**Limit (£m)**")
+
     cover_selections = {}
+    unpriced = []
     for name in options:
         c1, c2 = st.columns([2, 1])
         with c1:
             held = st.checkbox(name, key=f"chk_{name}")
         with c2:
             if held:
-                limit = st.number_input("£m", min_value=0.0, step=0.5,
-                                         key=f"limit_{name}", label_visibility="collapsed")
+                limit = st.number_input(
+                    f"{name} limit (£m)", min_value=0.0, step=0.5, format="%.2f",
+                    key=f"limit_{name}", label_visibility="collapsed",
+                    help="Indemnity limit in millions of pounds. 2 = £2,000,000.")
                 cover_selections[name] = limit * 1_000_000 if limit > 0 else None
+                # Echo the interpreted figure back — the box takes millions, so a
+                # mistyped "2000000" is otherwise invisible until the report.
+                if limit > 0:
+                    c2.caption(f"= {fmt_gbp(limit * 1_000_000)}")
+                else:
+                    unpriced.append(name)
+                    c2.caption("⚠️ no limit entered")
+
+    if unpriced:
+        # apply_gap_rules() treats a held-but-zero limit exactly like a gap, so
+        # say that here rather than letting the report contradict the tickbox.
+        st.warning("No limit entered for **" + "**, **".join(unpriced) + "** — "
+                   + ("this will be" if len(unpriced) == 1 else "these will be")
+                   + " benchmarked as if not held. Enter the limit in £m to have "
+                   + ("it" if len(unpriced) == 1 else "them")
+                   + " compared against peers instead.")
 
     st.divider()
     col1, col2 = st.columns(2)
@@ -222,7 +266,8 @@ elif st.session_state.step == "report":
     stats   = report["summary_stats"]
     exp     = report.get("explanation", {})
 
-    st.markdown(f"Cover benchmarking report — {profile['vertical']} · {profile.get('funding_stage') or 'stage unknown'}")
+    step_header(4, f"Cover benchmarking report — {profile['vertical']} · "
+                   f"{profile.get('funding_stage') or 'stage unknown'}")
 
     st.info(f"Benchmarked against **{stats.get('cohort_size', 0)} comparable {profile['vertical']} companies** "
             f"with real cover-line evidence · cohort {stats.get('cohort_confidence', 'unknown')}")
@@ -239,7 +284,10 @@ elif st.session_state.step == "report":
     exp_map = {f["cover"]: f for f in exp.get("cover_findings", [])}
 
     st.divider()
-    st.markdown("Findings")
+    st.markdown("#### Findings")
+    st.caption("**⬛ Not held** · **⬆️ Below benchmark** — held, but under the peer/band reference "
+               "limit · **✅ Adequate** — at or above it · **❔ Insufficient evidence** — too few "
+               "comparable peers to call. Open a row for the evidence behind it.")
 
     for priority_group in ["Immediate action", "For consideration", "Review at renewal"]:
         items = [g for g in gaps if g["priority"] == priority_group]
@@ -259,6 +307,7 @@ elif st.session_state.step == "report":
                     cols[1].markdown(f"**Capsule band**  \n{fmt_gbp(ev['band_rec'])}")
                 if ev.get("prevalence") is not None:
                     cols[2].markdown(f"**Prevalence**  \n{ev['prevalence']:.0%}")
+                    cols[2].caption("of comparable peers hold this cover")
                 if e.get("rationale"):
                     st.write(e["rationale"])
                 if ev.get("note"):
@@ -271,7 +320,7 @@ elif st.session_state.step == "report":
 
     if exp.get("top_actions"):
         st.divider()
-        st.markdown("Priority actions")
+        st.markdown("#### Priority actions")
         for a in exp["top_actions"]:
             st.write(f"{RAG_COLORS.get(a['priority'],'•')} {a['action']}")
 
