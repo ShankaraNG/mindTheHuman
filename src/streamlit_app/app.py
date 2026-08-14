@@ -42,7 +42,7 @@ COVER_OPTIONS = {
                  "Medical Malpractice", "Business Interruption"],
 }
 
-st.set_page_config(page_title="Capsule Cover — Benchmarking", page_icon="🛡️", layout="centered")
+st.set_page_config(page_title="Capsule Cover Benchmarking", page_icon="", layout="centered")
 
 
 @st.cache_resource
@@ -75,14 +75,14 @@ for k in ["step", "profile", "report", "current_cover"]:
 if st.session_state.step is None:
     st.session_state.step = "upload"
 
-st.markdown("## 🛡️ Capsule Cover — Cover benchmarking engine")
+st.markdown("Benchmarking engine")
 st.caption("Guidance, not regulated advice. Benchmarked against Capsule's own client book.")
 st.divider()
 
 
 # ══════════════════════════ STEP 1 — Upload ═══════════════════════════════
 if st.session_state.step == "upload":
-    st.markdown("### Step 1 — Upload the health check questionnaire")
+    st.markdown("Upload the health check questionnaire")
     uploaded = st.file_uploader("Questionnaire file", type=["csv", "xlsx", "xls"])
 
     col1, col2 = st.columns([1, 1])
@@ -125,7 +125,7 @@ if st.session_state.step == "upload":
 
 # ══════════════════════════ STEP 2 — Confirm profile ═══════════════════════
 elif st.session_state.step == "profile":
-    st.markdown("### Step 2 — Confirm the business profile")
+    st.markdown("Confirm the business profile")
     p = st.session_state.profile
 
     col1, col2 = st.columns(2)
@@ -173,7 +173,7 @@ elif st.session_state.step == "profile":
 
 # ══════════════════════════ STEP 3 — Current cover ═════════════════════════
 elif st.session_state.step == "cover":
-    st.markdown("### Step 3 — Current cover")
+    st.markdown("Current cover")
     st.caption("The questionnaire doesn't capture limits. Tell us what's currently held.")
 
     vertical = st.session_state.profile["vertical"]
@@ -222,7 +222,7 @@ elif st.session_state.step == "report":
     stats   = report["summary_stats"]
     exp     = report.get("explanation", {})
 
-    st.markdown(f"### Cover benchmarking report — {profile['vertical']} · {profile.get('funding_stage') or 'stage unknown'}")
+    st.markdown(f"Cover benchmarking report — {profile['vertical']} · {profile.get('funding_stage') or 'stage unknown'}")
 
     st.info(f"Benchmarked against **{stats.get('cohort_size', 0)} comparable {profile['vertical']} companies** "
             f"with real cover-line evidence · cohort {stats.get('cohort_confidence', 'unknown')}")
@@ -239,7 +239,7 @@ elif st.session_state.step == "report":
     exp_map = {f["cover"]: f for f in exp.get("cover_findings", [])}
 
     st.divider()
-    st.markdown("#### Findings")
+    st.markdown("Findings")
 
     for priority_group in ["Immediate action", "For consideration", "Review at renewal"]:
         items = [g for g in gaps if g["priority"] == priority_group]
@@ -271,7 +271,7 @@ elif st.session_state.step == "report":
 
     if exp.get("top_actions"):
         st.divider()
-        st.markdown("#### Priority actions")
+        st.markdown("Priority actions")
         for a in exp["top_actions"]:
             st.write(f"{RAG_COLORS.get(a['priority'],'•')} {a['action']}")
 
