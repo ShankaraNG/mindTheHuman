@@ -131,6 +131,7 @@ Return JSON with this exact structure:
 set it false rather than fabricate a citation."""
 
         raw = None
+        usage = {"input_tokens": 0, "output_tokens": 0}
         try:
             response = self.client.chat.completions.create(
                 model=self.model_name,
@@ -139,18 +140,35 @@ set it false rather than fabricate a citation."""
                     {"role": "user", "content": user_prompt},
                 ],
                 response_format={"type": "json_object"},
+                max_tokens=8000,  # raised from 4000 — Gemini 3.x bills internal
+                                  # "thinking" tokens at the output rate, counted
+                                  # against this same cap, so visible JSON content
+                                  # can get truncated well before hitting a pure
+                                  # content-length limit. 8000 still keeps the
+                                  # absolute worst case at ~£0.05, real margin
+                                  # under the £0.10 budget (see metrics.py).
             )
             raw = response.choices[0].message.content
+            if getattr(response, "usage", None):
+                usage = {
+                    "input_tokens": getattr(response.usage, "prompt_tokens", 0) or 0,
+                    "output_tokens": getattr(response.usage, "completion_tokens", 0) or 0,
+                }
             clean = re.sub(r"```(?:json)?|```", "", raw).strip()
             parsed = json.loads(clean)
             for finding in parsed.get("cover_findings", []):
                 finding.setdefault("alternatives", [])
                 for alt in finding["alternatives"]:
                     alt.setdefault("grounded", False)
+            parsed["_token_usage"] = usage
             return parsed
         except json.JSONDecodeError:
-            return {"executive_summary": raw or "(no response text)", "parse_error": True,
-                    "cover_findings": [], "top_actions": []}
+            return {"executive_summary": "Explanation could not be generated cleanly for this "
+                    "report — the underlying findings below are still correct and unaffected, "
+                    "only the plain-English writeup failed to parse.",
+                    "parse_error": True, "cover_findings": [], "top_actions": [],
+                    "_token_usage": usage, "_raw_response_for_debugging": raw}
         except Exception as e:
             return {"executive_summary": f"LLM explanation unavailable: {e}",
-                    "parse_error": True, "cover_findings": [], "top_actions": []}
+                    "parse_error": True, "cover_findings": [], "top_actions": [],
+                    "_token_usage": usage}

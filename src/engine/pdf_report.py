@@ -176,6 +176,22 @@ def build_pdf(report: dict) -> bytes:
             pdf.body_text(f"[{RAG_LABEL.get(a['priority'], a['priority'])}]  {a['action']}", size=9)
         pdf.ln(2)
 
+    # ── Performance / cost / CO2 ─────────────────────────────────────────
+    metrics = report.get("metrics", {})
+    if metrics:
+        pdf.section_title("Performance, cost & CO2")
+        timing = metrics.get("timing", {})
+        cost = metrics.get("cost", {})
+        co2 = metrics.get("co2_estimate", {})
+        pdf.body_text(
+            f"Total time: {timing.get('total_seconds', 0):.2f}s   "
+            f"Cost: GBP {cost.get('cost_gbp', 0):.4f}   "
+            f"Tokens: {cost.get('total_tokens', 0):,}", size=9)
+        pdf.body_text(
+            f"CO2 estimate: {co2.get('co2_grams_low',0):.3f}-{co2.get('co2_grams_high',0):.3f}g "
+            f"CO2e (order-of-magnitude estimate, not a measurement)", size=8)
+        pdf.ln(2)
+
     # ── Disclaimer ────────────────────────────────────────────────────────
     pdf.ln(4)
     pdf.set_font("Helvetica", "I", 8)

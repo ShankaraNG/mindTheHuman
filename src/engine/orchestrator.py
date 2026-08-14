@@ -33,6 +33,7 @@ import gap_rules
 import coverage_names
 from stage4_rag import RAGRetriever
 from gemini_explainer import GeminiExplainer
+from metrics import StageTimer, build_metrics
 
 
 class Orchestrator:
@@ -55,14 +56,22 @@ class Orchestrator:
                        canonicalised here before comparison since only the
                        caller knows the raw source.
         """
+        timer = StageTimer()  # constructed first — captures true start of run()
+
         canon_cover = {}
         for raw_name, limit in current_cover.items():
             c = coverage_names.normalise_coverage(raw_name)
             canon_cover[c.canonical or raw_name] = limit
 
+        timer.start("peer_match_and_benchmark")
         result = self.resolver.resolve(profile)
-        findings = gap_rules.apply_gap_rules(result, canon_cover, profile)
+        timer.stop()
 
+        timer.start("gap_rules")
+        findings = gap_rules.apply_gap_rules(result, canon_cover, profile)
+        timer.stop()
+
+        timer.start("rag_retrieval")
         gap_results = []
         for f in findings:
             rag_passages = []
@@ -84,6 +93,7 @@ class Orchestrator:
                 },
                 "matched_recs": [], "rag_passages": rag_passages,
             })
+        timer.stop()
 
         immediate = [g for g in gap_results if g["priority"] == gap_rules.IMMEDIATE]
         consider  = [g for g in gap_results if g["priority"] == gap_rules.CONSIDER]
@@ -97,7 +107,18 @@ class Orchestrator:
             "covers_assessed": len(gap_results),
         }
 
+        timer.start("llm_explanation")
         explanation = self.explainer.explain(profile, gap_results, summary_stats)
+        timer.stop()
+
+        token_usage = explanation.pop("_token_usage", {"input_tokens": 0, "output_tokens": 0})
+        raw_debug = explanation.pop("_raw_response_for_debugging", None)
+        if raw_debug:
+            # Kept out of the report dict entirely — never shown in the UI or
+            # PDF — but printed server-side so a truncated/malformed response
+            # is diagnosable without needing to reproduce it live.
+            print(f"[orchestrator] LLM response failed to parse, raw text follows:\n{raw_debug[:2000]}")
+        metrics = build_metrics(timer, token_usage["input_tokens"], token_usage["output_tokens"])
 
         return {
             "profile": profile,
@@ -105,4 +126,5 @@ class Orchestrator:
             "gap_results": gap_results,
             "summary_stats": summary_stats,
             "explanation": explanation,
+            "metrics": metrics,
         }
