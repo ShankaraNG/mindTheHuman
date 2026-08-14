@@ -61,7 +61,7 @@ class Orchestrator:
             canon_cover[c.canonical or raw_name] = limit
 
         result = self.resolver.resolve(profile)
-        findings = gap_rules.apply_gap_rules(result, canon_cover)
+        findings = gap_rules.apply_gap_rules(result, canon_cover, profile)
 
         gap_results = []
         for f in findings:

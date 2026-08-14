@@ -9,3 +9,4 @@ venv/
 .vscode
 .agents
 .claude
+.streamlit

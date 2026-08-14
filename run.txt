@@ -1,3 +1,31 @@
+# 1. Environment
+C:\python3119\python.exe -m venv venv
+venv\Scripts\activate
+python --version                          # confirm 3.11.x, not 3.14
+
+# 2. Dependencies
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+
+# 3. Secrets — both files, both UTF-8, no BOM
+python -c "open('.streamlit/secrets.toml','w',encoding='utf-8').write('GEMINI_API_KEY = \"YOUR_KEY\"\n')"
+python -c "open('.env','w',encoding='utf-8').write('GEMINI_API_KEY=YOUR_KEY\n')"
+
+# 4. Clean pipeline
+python src\clean\run_all.py                # watch for 3x PASS
+
+# 5. Build the normalised peer pool
+python src\profile\build_normalised.py
+
+# 6. Sanity check everything works together
+python src\evaluation\run_eval.py           # watch for "embeddings worker started"
+
+# 7a. Run the app
+streamlit run src\streamlit_app\app.py
+
+# 7b. Or run the API instead/as well
+python -m uvicorn src.api.main:app --reload --port 8000
+=======
 # Capsule Cover — Benchmarking Engine: Full Setup Guide
 
 Complete steps from a fresh checkout to a running system.
