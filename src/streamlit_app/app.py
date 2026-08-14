@@ -19,6 +19,7 @@ for _sub in ("", "profile", "benchmark", "engine"):
 from engine.questionnaire_parser import parse_questionnaire_file
 from engine.orchestrator import Orchestrator
 from engine.pdf_report import build_pdf
+from engine.metrics_report import save_metrics_log
 from profile.normalise import normalise_intake
 
 REPO_ROOT       = Path(__file__).parent.parent.parent
@@ -42,7 +43,7 @@ COVER_OPTIONS = {
                  "Medical Malpractice", "Business Interruption"],
 }
 
-st.set_page_config(page_title="Capsule Cover Benchmarking", page_icon="", layout="centered")
+st.set_page_config(page_title="Capsule Cover — Benchmarking", page_icon="🛡️", layout="centered")
 
 
 @st.cache_resource
@@ -75,14 +76,14 @@ for k in ["step", "profile", "report", "current_cover"]:
 if st.session_state.step is None:
     st.session_state.step = "upload"
 
-st.markdown("Benchmarking engine")
+st.markdown("## 🛡️ Capsule Cover — Cover benchmarking engine")
 st.caption("Guidance, not regulated advice. Benchmarked against Capsule's own client book.")
 st.divider()
 
 
 # ══════════════════════════ STEP 1 — Upload ═══════════════════════════════
 if st.session_state.step == "upload":
-    st.markdown("Upload the health check questionnaire")
+    st.markdown("### Step 1 — Upload the health check questionnaire")
     uploaded = st.file_uploader("Questionnaire file", type=["csv", "xlsx", "xls"])
 
     col1, col2 = st.columns([1, 1])
@@ -125,7 +126,7 @@ if st.session_state.step == "upload":
 
 # ══════════════════════════ STEP 2 — Confirm profile ═══════════════════════
 elif st.session_state.step == "profile":
-    st.markdown("Confirm the business profile")
+    st.markdown("### Step 2 — Confirm the business profile")
     p = st.session_state.profile
 
     col1, col2 = st.columns(2)
@@ -173,7 +174,7 @@ elif st.session_state.step == "profile":
 
 # ══════════════════════════ STEP 3 — Current cover ═════════════════════════
 elif st.session_state.step == "cover":
-    st.markdown("Current cover")
+    st.markdown("### Step 3 — Current cover")
     st.caption("The questionnaire doesn't capture limits. Tell us what's currently held.")
 
     vertical = st.session_state.profile["vertical"]
@@ -222,7 +223,7 @@ elif st.session_state.step == "report":
     stats   = report["summary_stats"]
     exp     = report.get("explanation", {})
 
-    st.markdown(f"Cover benchmarking report — {profile['vertical']} · {profile.get('funding_stage') or 'stage unknown'}")
+    st.markdown(f"### Cover benchmarking report — {profile['vertical']} · {profile.get('funding_stage') or 'stage unknown'}")
 
     st.info(f"Benchmarked against **{stats.get('cohort_size', 0)} comparable {profile['vertical']} companies** "
             f"with real cover-line evidence · cohort {stats.get('cohort_confidence', 'unknown')}")
@@ -239,7 +240,7 @@ elif st.session_state.step == "report":
     exp_map = {f["cover"]: f for f in exp.get("cover_findings", [])}
 
     st.divider()
-    st.markdown("Findings")
+    st.markdown("#### Findings")
 
     for priority_group in ["Immediate action", "For consideration", "Review at renewal"]:
         items = [g for g in gaps if g["priority"] == priority_group]
@@ -271,9 +272,24 @@ elif st.session_state.step == "report":
 
     if exp.get("top_actions"):
         st.divider()
-        st.markdown("Priority actions")
+        st.markdown("#### Priority actions")
         for a in exp["top_actions"]:
             st.write(f"{RAG_COLORS.get(a['priority'],'•')} {a['action']}")
+
+    # Metrics deliberately NOT shown inline — a broker's cover report and an
+    # internal cost/CO2/performance log serve different audiences. Saved
+    # silently to a backend log instead — see metrics_report.py.
+    if report.get("metrics"):
+        try:
+            log_path = save_metrics_log(report)
+        except Exception:
+            pass  # never let a logging failure break the actual report
+
+            st.caption(f"**CO2 estimate**: {co2.get('co2_grams_low',0):.3f}g – "
+                      f"{co2.get('co2_grams_high',0):.3f}g CO2e — "
+                      f"_this is an order-of-magnitude estimate, not a measurement, "
+                      f"see src/engine/metrics.py for the full sourced methodology._")
+            st.caption(f"_{cost.get('pricing_source', '')}_")
 
     st.divider()
     st.caption(f"**Guidance, not regulated advice.** {exp.get('disclaimer', '')}")
